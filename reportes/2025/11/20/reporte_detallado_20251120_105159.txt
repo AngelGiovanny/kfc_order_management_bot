@@ -1,0 +1,21 @@
+============================================================
+REPORTE DETALLADO DE USO - KFC ORDER MANAGEMENT BOT
+============================================================
+Generado: 2025-11-20 10:51:53
+
+RESUMEN EJECUTIVO:
+------------------------------
+Total Usuarios Únicos: 0
+Total Actividades: 0
+Promedio Act/Usuario: 0.00
+
+DISTRIBUCIÓN POR TIPO DE ACCIÓN:
+-----------------------------------
+
+TOP 10 USUARIOS MÁS ACTIVOS:
+-----------------------------------
+
+ACTIVIDAD POR HORA DEL DÍA:
+-----------------------------------
+
+============================================================

@@ -10,7 +10,7 @@ from src.handlers.commands import CommandHandlers
 from src.handlers.messages import MessageHandlers
 from src.handlers.callbacks import CallbackHandlers
 from src.services.image_service import image_service
-
+from src.services.report_service import ReportService
 
 class KFCBot:
     def __init__(self):
@@ -161,3 +161,98 @@ if __name__ == '__main__':
     finally:
         if not loop.is_closed():
             loop.close()
+
+
+            async def reporte_avanzado(update: Update, context: CallbackContext) -> None:
+                """Nuevo comando para reportes avanzados"""
+                user_id = update.message.chat.id
+                if user_id in admins:
+                    try:
+                        await update.message.reply_text("📊 Generando reporte avanzado...")
+
+                        # Generar reporte completo
+                        report_data = ReportService.generate_usage_report(activity_records)
+
+                        if not report_data:
+                            await update.message.reply_text("❌ Error generando reporte")
+                            return
+
+                        # Enviar gráfica
+                        chart_buffer = ReportService.generate_usage_chart(report_data)
+                        if chart_buffer.getbuffer().nbytes > 0:
+                            await update.message.reply_photo(
+                                photo=chart_buffer,
+                                caption="📈 Gráficas de Uso del Bot"
+                            )
+
+                        # Enviar reporte Excel
+                        excel_buffer = ReportService.generate_excel_report(activity_records, report_data)
+                        await update.message.reply_document(
+                            document=InputFile(excel_buffer,
+                                               filename=f"reporte_avanzado_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"),
+                            caption="📄 Reporte Avanzado en Excel"
+                        )
+
+                        # Enviar reporte TXT detallado
+                        txt_report = ReportService.generate_detailed_txt_report(activity_records, report_data)
+                        txt_buffer = io.BytesIO(txt_report.encode('utf-8'))
+                        await update.message.reply_document(
+                            document=InputFile(txt_buffer,
+                                               filename=f"reporte_detallado_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"),
+                            caption="📋 Reporte Detallado en TXT"
+                        )
+
+                    except Exception as e:
+                        logger.error(f"Error en reporte avanzado: {str(e)}")
+                        await update.message.reply_text("❌ Error generando reportes avanzados")
+                else:
+                    await update.message.reply_text("⛔ No tiene permisos para este comando")
+
+
+            async def estadisticas_detalladas(update: Update, context: CallbackContext) -> None:
+                """Estadísticas detalladas en el chat"""
+                user_id = update.message.chat.id
+                if user_id in admins:
+                    try:
+                        report_data = ReportService.generate_usage_report(activity_records)
+
+                        if not report_data:
+                            await update.message.reply_text("❌ Error generando estadísticas")
+                            return
+
+                        response = [
+                            "📊 *ESTADÍSTICAS DETALLADAS*",
+                            "",
+                            f"👥 *Usuarios Únicos:* {report_data['summary']['total_users']}",
+                            f"📈 *Total Actividades:* {report_data['summary']['total_activities']}",
+                            f"📊 *Promedio por Usuario:* {report_data['summary']['avg_activities_per_user']:.1f}",
+                            "",
+                            "*📋 DISTRIBUCIÓN POR ACCIÓN:*"
+                        ]
+
+                        for action, count in report_data['action_breakdown'].items():
+                            percentage = (count / report_data['summary']['total_activities']) * 100
+                            response.append(f"• {action}: {count} ({percentage:.1f}%)")
+
+                        response.extend([
+                            "",
+                            "*🏪 TOP 5 TIENDAS:*"
+                        ])
+
+                        top_stores = list(report_data['top_stores'].items())[:5]
+                        for i, (store, count) in enumerate(top_stores, 1):
+                            response.append(f"{i}. {store}: {count} actividades")
+
+                        response.extend([
+                            "",
+                            f"🕐 *Hora Pico:* {max(report_data['hourly_usage'].items(), key=lambda x: x[1])[0]}:00",
+                            f"📅 *Reporte generado:* {report_data['summary']['report_generated_at']}"
+                        ])
+
+                        await update.message.reply_text("\n".join(response))
+
+                    except Exception as e:
+                        logger.error(f"Error en estadísticas detalladas: {str(e)}")
+                        await update.message.reply_text("❌ Error generando estadísticas")
+                else:
+                    await update.message.reply_text("⛔ No tiene permisos para este comando")
