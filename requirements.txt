@@ -1,0 +1,11 @@
+python-telegram-bot==20.7
+pyodbc==4.0.39
+selenium==4.15.0
+Pillow==10.1.0
+requests==2.31.0
+python-dotenv==1.0.0
+websockets==12.0
+aiohttp==3.9.1
+asyncio==3.4.3
+chromedriver-autoinstaller==0.6.4
+urllib3==2.1.0
