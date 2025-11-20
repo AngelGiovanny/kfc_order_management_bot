@@ -1,6 +1,7 @@
 import time
 import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import asyncio
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import ContextTypes, MessageHandler, filters
 
 from src.config.settings import settings
@@ -8,7 +9,6 @@ from src.config.constants import USER_STATES
 from src.utils.logger import logger
 from src.services.order_service import OrderService
 from src.services.print_service import PrintService
-from src.services.image_service import image_service
 from src.handlers.callbacks import CallbackHandlers
 
 
@@ -28,7 +28,7 @@ class MessageHandlers:
         username = update.effective_user.username or update.effective_user.full_name
 
         # Comando especial para reiniciar
-        if incoming_msg.lower() in ['/reiniciar', 'reiniciar', 'reset']:
+        if incoming_msg.lower() in ['/reiniciar', 'reiniciar', 'reset', '/start']:
             self.user_states[user_id] = {'step': USER_STATES['GET_STORE_CODE']}
             await update.message.reply_text(
                 "🔄 *Reiniciando sistema...*\n\n"
@@ -140,7 +140,6 @@ class MessageHandlers:
 
         # Test de conexión con timeout
         try:
-            import asyncio
             # Ejecutar con timeout
             is_connected = await asyncio.wait_for(
                 asyncio.get_event_loop().run_in_executor(
@@ -220,24 +219,7 @@ class MessageHandlers:
             status = self.order_service.get_order_status(store_code, order_id)
 
             if status:
-                if len(status) == 6:  # With motorized info
-                    response_text = (
-                        f'🍗 *Estado de Orden:* `{order_id}`\n\n'
-                        f'📋 **Código:** `{status[0]}`\n'
-                        f'📊 **Estado:** `{status[1]}`\n'
-                        f'🧾 **Factura ID:** `{status[2]}`\n'
-                        f'💳 **Medio:** `{status[3]}`\n'
-                        f'📅 **Fecha:** `{status[4].strftime("%Y-%m-%d %H:%M:%S")}`\n'
-                        f'🚗 **Motorizado:** `{status[5]}`'
-                    )
-                else:
-                    response_text = (
-                        f'🍗 *Estado de Orden:* `{order_id}`\n\n'
-                        f'📊 **Estado:** `{status[0]}`\n'
-                        f'🧾 **Factura ID:** `{status[1]}`\n'
-                        f'🚗 **Motorizado:** `{status[5] if len(status) > 5 else "No asignado"}`'
-                    )
-
+                response_text = self.order_service.format_order_status_response(status, order_id)
                 await update.message.reply_text(response_text, parse_mode='Markdown')
             else:
                 await update.message.reply_text(
@@ -263,17 +245,7 @@ class MessageHandlers:
             audit = self.order_service.audit_order(store_code, order_id)
 
             if audit:
-                response_text = f'📊 *Auditoría de Orden:* `{order_id}`\n\n'
-                for i, row in enumerate(audit, 1):
-                    detalle = (
-                        f'**Registro {i}:**\n'
-                        f'• 🆔 Código: `{row[0]}`\n'
-                        f'• 📊 Estado: `{row[1]}`\n'
-                        f'• 📅 Fecha: `{row[2].strftime("%Y-%m-%d %H:%M:%S")}`\n'
-                        f'• 🚗 Motorizado: `{row[3]}`\n'
-                        f'---\n'
-                    )
-                    response_text += detalle
+                response_text = self.order_service.format_audit_response(audit, order_id)
 
                 # Split long messages if needed
                 if len(response_text) > 4000:
@@ -299,39 +271,59 @@ class MessageHandlers:
         await self.callback_handlers.mostrar_menu_principal(update.message)
 
     async def _handle_invoice_image(self, update: Update, cfac_id: str, state: dict):
-        """Handle invoice image generation"""
+        """Handle invoice image generation with Selenium - MEJORADO CON ASYNCIO"""
         store_code = state['store_code']
 
         try:
-            invoice_url = self.print_service._get_print_url('factura', store_code, cfac_id)
+            # Mensaje de procesamiento
+            processing_msg = await update.message.reply_text(
+                "📸 *Capturando imagen de la factura...*\n\n"
+                "⏳ Esto puede tomar de 10-15 segundos\n"
+                "🔄 *Por favor espere...*",
+                parse_mode='Markdown'
+            )
 
-            if invoice_url:
-                if not image_service.is_available():
-                    await update.message.reply_text(
-                        "⚠️ *Servicio de imágenes no disponible*\n\n"
-                        "🔗 Puede acceder directamente a la factura aquí:\n"
-                        f"`{invoice_url}`",
-                        parse_mode='Markdown'
-                    )
-                else:
-                    image_stream = await image_service.url_to_image(invoice_url)
-                    await update.message.reply_photo(
-                        photo=image_stream,
-                        caption=f"🧾 *Factura:* `{cfac_id}`\n🏪 *Tienda:* `{store_code}`",
-                        parse_mode='Markdown'
-                    )
-            else:
+            # Ejecutar en thread separado para no bloquear el event loop
+            image_buffer = await asyncio.get_event_loop().run_in_executor(
+                None,
+                self.order_service.generate_invoice_image,
+                store_code,
+                cfac_id
+            )
+
+            if image_buffer and image_buffer.getbuffer().nbytes > 100:
+                await update.message.reply_photo(
+                    photo=InputFile(image_buffer, filename=f"factura_{cfac_id}.png"),
+                    caption=f"🧾 *Factura:* `{cfac_id}`\n🏪 *Tienda:* `{store_code}`\n📅 *Generado:* {datetime.datetime.now().strftime('%H:%M:%S')}",
+                    parse_mode='Markdown'
+                )
+                await processing_msg.delete()
+
+                # Mensaje de éxito
                 await update.message.reply_text(
-                    f'❌ No se encontró la factura para el ID `{cfac_id}` en la tienda `{store_code}`',
+                    "✅ *Imagen generada exitosamente*\n\n"
+                    "📋 La factura ha sido capturada y enviada.",
+                    parse_mode='Markdown'
+                )
+            else:
+                # Si falla, mostrar URL directa
+                invoice_url = self.order_service.get_invoice_url(store_code, cfac_id)
+                await processing_msg.edit_text(
+                    f"❌ *No se pudo generar la imagen automática*\n\n"
+                    f"🔗 **Acceda directamente a la factura:**\n"
+                    f"`{invoice_url}`\n\n"
+                    f"📞 *Si el problema persiste, contacte a soporte*",
                     parse_mode='Markdown'
                 )
 
         except Exception as e:
-            logger.error(f"Error generating invoice image: {str(e)}")
-            invoice_url = self.print_service._get_print_url('factura', store_code, cfac_id)
+            logger.error(f"Error generando imagen de factura: {str(e)}")
+            invoice_url = self.order_service.get_invoice_url(store_code, cfac_id)
             await update.message.reply_text(
-                f'❌ *Error generando imagen*\n\n'
-                f'🔗 Acceda directamente a la factura:\n`{invoice_url}`',
+                f"❌ *Error generando imagen*\n\n"
+                f"🔗 **Acceda directamente a la factura:**\n"
+                f"`{invoice_url}`\n\n"
+                f"📋 **Error:** `{str(e)}`",
                 parse_mode='Markdown'
             )
 
@@ -339,45 +331,62 @@ class MessageHandlers:
         await self.callback_handlers.mostrar_menu_principal(update.message)
 
     async def _handle_comanda_image(self, update: Update, cfac_id: str, state: dict):
-        """Handle comanda image generation"""
+        """Handle comanda image generation with Selenium - MEJORADO CON ASYNCIO"""
         store_code = state['store_code']
 
         try:
-            comanda_url = self.order_service.get_comanda_url(store_code, cfac_id)
+            processing_msg = await update.message.reply_text(
+                "📸 *Capturando imagen de la comanda...*\n\n"
+                "⏳ Esto puede tomar de 10-15 segundos\n"
+                "🔄 *Por favor espere...*",
+                parse_mode='Markdown'
+            )
 
-            if comanda_url:
-                if not image_service.is_available():
-                    await update.message.reply_text(
-                        "⚠️ *Servicio de imágenes no disponible*\n\n"
-                        "🔗 Puede acceder directamente a la comanda aquí:\n"
-                        f"`{comanda_url}`",
-                        parse_mode='Markdown'
-                    )
-                else:
-                    image_stream = await image_service.url_to_image(comanda_url)
-                    await update.message.reply_photo(
-                        photo=image_stream,
-                        caption=f"📦 *Comanda:* `{cfac_id}`\n🏪 *Tienda:* `{store_code}`",
-                        parse_mode='Markdown'
-                    )
-            else:
+            # Ejecutar en thread separado para no bloquear el event loop
+            image_buffer = await asyncio.get_event_loop().run_in_executor(
+                None,
+                self.order_service.generate_comanda_image,
+                store_code,
+                cfac_id
+            )
+
+            if image_buffer and image_buffer.getbuffer().nbytes > 100:
+                await update.message.reply_photo(
+                    photo=InputFile(image_buffer, filename=f"comanda_{cfac_id}.png"),
+                    caption=f"🍔 *Comanda:* `{cfac_id}`\n🏪 *Tienda:* `{store_code}`\n📅 *Generado:* {datetime.datetime.now().strftime('%H:%M:%S')}",
+                    parse_mode='Markdown'
+                )
+                await processing_msg.delete()
+
+                # Mensaje de éxito
                 await update.message.reply_text(
-                    f'❌ No se encontró la comanda para el ID `{cfac_id}`',
+                    "✅ *Comanda generada exitosamente*\n\n"
+                    "📋 La comanda ha sido capturada y enviada.",
+                    parse_mode='Markdown'
+                )
+            else:
+                comanda_url = self.order_service.get_comanda_url(store_code, cfac_id)
+                await processing_msg.edit_text(
+                    f"❌ *No se pudo generar la imagen de comanda*\n\n"
+                    f"🔗 **URL de comanda:**\n`{comanda_url}`\n\n"
+                    f"📞 *Si el problema persiste, contacte a soporte*",
                     parse_mode='Markdown'
                 )
 
         except Exception as e:
-            logger.error(f"Error generating comanda image: {str(e)}")
+            logger.error(f"Error generando comanda: {str(e)}")
             comanda_url = self.order_service.get_comanda_url(store_code, cfac_id)
             if comanda_url:
                 await update.message.reply_text(
-                    f'❌ *Error generando imagen*\n\n'
-                    f'🔗 Acceda directamente a la comanda:\n`{comanda_url}`',
+                    f"❌ *Error generando imagen*\n\n"
+                    f"🔗 **Acceda directamente a la comanda:**\n`{comanda_url}`\n\n"
+                    f"📋 **Error:** `{str(e)}`",
                     parse_mode='Markdown'
                 )
             else:
                 await update.message.reply_text(
-                    f'❌ Error generando imagen de comanda: `{str(e)}`',
+                    f"❌ *Error generando imagen de comanda:*\n`{str(e)}`\n\n"
+                    f"📞 *Contacte a soporte técnico*",
                     parse_mode='Markdown'
                 )
 
@@ -385,7 +394,7 @@ class MessageHandlers:
         await self.callback_handlers.mostrar_menu_principal(update.message)
 
     async def _handle_associated_code(self, update: Update, cfac_id: str, state: dict):
-        """Handle associated code request - ¡IMPLEMENTADO CORRECTAMENTE!"""
+        """Handle associated code request"""
         store_code = state['store_code']
 
         try:
@@ -393,21 +402,30 @@ class MessageHandlers:
 
             if codigo_asociado:
                 await update.message.reply_text(
-                    f'🔍 *Código Asociado*\n\n'
+                    f'🔍 *Código Asociado Encontrado* ✅\n\n'
                     f'🧾 **Factura:** `{cfac_id}`\n'
-                    f'🔗 **Código Asociado:** `{codigo_asociado}`',
+                    f'🔗 **Código Asociado:** `{codigo_asociado}`\n'
+                    f'🏪 **Tienda:** `{store_code}`',
                     parse_mode='Markdown'
                 )
             else:
                 await update.message.reply_text(
-                    f'❌ No se encontró el código asociado para la factura `{cfac_id}`',
+                    f'❌ *Código Asociado No Encontrado*\n\n'
+                    f'🧾 **Factura:** `{cfac_id}`\n'
+                    f'🏪 **Tienda:** `{store_code}`\n\n'
+                    f'💡 **Posibles causas:**\n'
+                    f'• La factura no tiene código asociado\n'
+                    f'• La factura es muy reciente\n'
+                    f'• Error en la búsqueda',
                     parse_mode='Markdown'
                 )
 
         except Exception as e:
             logger.error(f"Error getting associated code: {str(e)}")
             await update.message.reply_text(
-                f'❌ Error obteniendo código asociado: `{str(e)}`',
+                f'❌ *Error obteniendo código asociado*\n\n'
+                f'📋 **Detalles:** `{str(e)}`\n\n'
+                f'📞 *Contacte a soporte si el problema persiste*',
                 parse_mode='Markdown'
             )
 
@@ -416,10 +434,26 @@ class MessageHandlers:
 
     async def _handle_reprint_id(self, update: Update, document_id: str, state: dict):
         """Handle reprint document ID input"""
+        document_type = state.get('reimpresion_tipo')
+
+        # Validar formato del ID según el tipo
+        if document_type in ['factura', 'nota_credito'] and not document_id.isdigit():
+            await update.message.reply_text(
+                "❌ *Formato incorrecto*\n\n"
+                f"Para {document_type.replace('_', ' ').title()}, el ID debe ser numérico.\n\n"
+                "🔢 **Por favor, ingrese un ID válido:**",
+                parse_mode='Markdown'
+            )
+            return
+
         state['reimpresion_id_documento'] = document_id
+
         await update.message.reply_text(
-            "📝 *Re-Impresión Solicitada*\n\n"
-            "🔢 **Por favor, ingrese el motivo de la reimpresión:**",
+            f"📝 *Re-Impresión Solicitada*\n\n"
+            f"📄 **Tipo:** {document_type.replace('_', ' ').title()}\n"
+            f"🔢 **ID:** `{document_id}`\n\n"
+            "📋 **Por favor, ingrese el motivo de la reimpresión:**\n"
+            "(Ejemplo: 'No salió impreso', 'Papel atascado', 'Calidad deficiente')",
             parse_mode='Markdown'
         )
         state['step'] = USER_STATES['GET_REPRINT_REASON']
@@ -427,8 +461,19 @@ class MessageHandlers:
     async def _handle_reprint_reason(self, update: Update, motivo: str, state: dict):
         """Handle reprint reason and process reprint"""
         document_id = state.get('reimpresion_id_documento')
-        document_type = state.get('reimpresion_id_type')
+        document_type = state.get('reimpresion_tipo')
         store_code = state['store_code']
+
+        # Validar que tenemos todos los datos necesarios
+        if not document_id or not document_type:
+            await update.message.reply_text(
+                "❌ *Error en los datos de reimpresión*\n\n"
+                "🔄 Por favor, inicie el proceso nuevamente.",
+                parse_mode='Markdown'
+            )
+            state['step'] = USER_STATES['MAIN_MENU']
+            await self.callback_handlers.mostrar_menu_principal(update.message)
+            return
 
         # Check reprint limits
         reprint_key = f'{document_type}_{document_id}'
@@ -439,13 +484,25 @@ class MessageHandlers:
             await update.message.reply_text(
                 f'❌ *Límite de re-impresiones alcanzado*\n\n'
                 f'📄 **Documento:** `{document_id}`\n'
+                f'📋 **Tipo:** {document_type.replace("_", " ").title()}\n'
                 f'🔢 **Límite:** `{max_reprints}` re-impresión(es)\n\n'
-                f'⚠️ No se pueden realizar más re-impresiones para este documento.',
+                f'⚠️ No se pueden realizar más re-impresiones para este documento.\n\n'
+                f'📞 **Contacte a Mesa de Servicio** para asistencia.',
                 parse_mode='Markdown'
             )
             state['step'] = USER_STATES['MAIN_MENU']
             await self.callback_handlers.mostrar_menu_principal(update.message)
             return
+
+        # Mostrar mensaje de procesamiento
+        processing_msg = await update.message.reply_text(
+            f"🖨️ *Procesando re-impresión...*\n\n"
+            f"📄 **Documento:** {document_type.replace('_', ' ').title()}\n"
+            f"🔢 **ID:** `{document_id}`\n"
+            f"🏪 **Tienda:** `{store_code}`\n\n"
+            f"⏳ *Por favor espere...*",
+            parse_mode='Markdown'
+        )
 
         # Log reprint attempt
         log_message = (
@@ -464,6 +521,7 @@ class MessageHandlers:
         if result['success']:
             self.conteo_impresiones[reprint_key] = current_count + 1
 
+        await processing_msg.delete()
         await update.message.reply_text(
             f'🖨️ *Resultado Re-Impresión*\n\n{result["message"]}',
             parse_mode='Markdown'

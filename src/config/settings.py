@@ -13,7 +13,7 @@ class DatabaseConfig:
 
 @dataclass
 class BotConfig:
-    token: str = os.getenv('BOT_TOKEN', '7384588957:AAFWIsWQTyoNdK9Fa18HaneW4wsGqdyjRlM')
+    token: str = os.getenv('BOT_TOKEN', '7538601866:AAGF6ZGuq44nYj8wpNQkgHIlkn4t9DaZLkc')
     admins: List[int] = None
     authorized_group_id: int = int(os.getenv('AUTHORIZED_GROUP_ID', '-1002147164153'))
     max_inactivity_time: int = int(os.getenv('MAX_INACTIVITY_TIME', '120'))  # Aumentado a 2min

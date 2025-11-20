@@ -5,7 +5,6 @@ import time
 
 from src.config.settings import settings
 from src.database.connection import db_manager
-from src.database.queries import PRINT_DATA_QUERY
 from src.utils.logger import logger
 
 
@@ -30,16 +29,11 @@ class PrintService:
             elif document_type == 'nota_credito':
                 url = f"{base_url}/pos/facturacion/impresion/impresion_factura.php?cfac_id={document_id}&tipo_comprobante=N&"
             elif document_type == 'comanda':
-                results = db_manager.execute_query(
-                    store_code,
-                    "SELECT TOP 1 IDCabeceraordenPedido FROM Cabecera_Factura WHERE cfac_id = ?",
-                    (document_id,)
-                )
-                if results:
-                    odp_id = results[0][0]
-                    url = f"{base_url}/PoS/ordenpedido/impresion/imprimir_ordenpedido.php?odp_id={odp_id}&tipoServicio=2&canalImpresion=0&guardaOrden=0&numeroCuenta=1"
-                else:
-                    return None
+                # Usar OrderService para obtener URL de comanda
+                from src.services.order_service import OrderService
+                url = OrderService.get_comanda_url(store_code, document_id)
+            else:
+                return None
 
             logger.info(f"🌐 URL generada para {document_type}: {url}")
             return url
@@ -333,3 +327,5 @@ class PrintService:
     def get_max_reprints(self, document_type: str) -> int:
         """Get maximum allowed reprints for document type"""
         return self.settings.max_reprints.get(document_type, 1)
+
+    # ELIMINAR métodos de generación de imágenes - ahora se usa OrderService directamente
