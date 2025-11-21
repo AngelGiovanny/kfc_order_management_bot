@@ -193,46 +193,99 @@ class CommandHandlers:
         await update.message.reply_text(stats, parse_mode='Markdown')
 
     async def reporte_avanzado(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Reporte avanzado con gráficas"""
+        """Nuevo comando para reportes avanzados con gráficas y análisis completo - CORREGIDO"""
         user_id = update.effective_user.id
 
         if user_id not in settings.bot.admins:
-            await update.message.reply_text("⛔ No tiene permisos para este comando")
+            await update.message.reply_text("⛔ No tiene permisos de administrador para este comando")
             return
 
         try:
-            await update.message.reply_text("📊 Generando reporte avanzado...")
+            processing_msg = await update.message.reply_text(
+                "📊 *Generando reporte avanzado...*\n\n"
+                "⏳ *Esto puede tomar unos segundos...*",
+                parse_mode='Markdown'
+            )
 
-            # Generar reporte
+            # Generar reporte completo
             report_data = self.report_service.generate_usage_report(self.activity_records)
 
-            if not report_data or not report_data.get('summary'):
-                await update.message.reply_text("❌ No hay datos para generar el reporte")
+            if not report_data or report_data['summary']['total_activities'] == 0:
+                await processing_msg.edit_text(
+                    "📊 *No hay datos suficientes para generar el reporte*\n\n"
+                    "💡 *Realiza algunas actividades en el bot primero.*",
+                    parse_mode='Markdown'
+                )
                 return
 
-            # Enviar gráfica
-            chart_buffer = self.report_service.generate_usage_chart(report_data, save_file=True)
-            if chart_buffer.getbuffer().nbytes > 100:
-                await update.message.reply_photo(
-                    photo=InputFile(chart_buffer, filename="grafica_uso.png"),
-                    caption="📈 Gráficas de Uso del Bot"
-                )
+            # 1. Enviar gráfica de uso
+            try:
+                chart_buffer = self.report_service.generate_usage_chart(report_data, save_file=True)
+                if chart_buffer.getbuffer().nbytes > 1000:  # Verificar que no esté vacío
+                    await update.message.reply_photo(
+                        photo=InputFile(chart_buffer, filename="grafica_uso.png"),
+                        caption="📈 **Gráficas de Uso del Bot**\n\nAnálisis visual del uso y distribución de actividades",
+                        parse_mode='Markdown'
+                    )
+            except Exception as e:
+                logger.error(f"Error enviando gráfica: {str(e)}")
+                await update.message.reply_text("❌ Error generando gráficas")
 
-            # Resumen
+            # 2. Enviar reporte Excel
+            try:
+                excel_buffer = self.report_service.generate_excel_report(self.activity_records, report_data,
+                                                                         save_file=True)
+                if excel_buffer.getbuffer().nbytes > 1000:
+                    filename = f"reporte_avanzado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+                    await update.message.reply_document(
+                        document=InputFile(excel_buffer, filename=filename),
+                        caption="📊 **Reporte Avanzado en Excel**\n\nIncluye múltiples hojas con análisis detallado",
+                        parse_mode='Markdown'
+                    )
+            except Exception as e:
+                logger.error(f"Error enviando Excel: {str(e)}")
+                await update.message.reply_text("❌ Error generando reporte Excel")
+
+            # 3. Enviar reporte TXT
+            try:
+                txt_report = self.report_service.generate_detailed_txt_report(self.activity_records, report_data,
+                                                                              save_file=True)
+                if txt_report and "Error generando reporte" not in txt_report:
+                    txt_buffer = io.BytesIO(txt_report.encode('utf-8'))
+                    filename = f"reporte_detallado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+                    await update.message.reply_document(
+                        document=InputFile(txt_buffer, filename=filename),
+                        caption="📋 **Reporte Detallado en TXT**\n\nResumen ejecutivo y análisis textual",
+                        parse_mode='Markdown'
+                    )
+            except Exception as e:
+                logger.error(f"Error enviando TXT: {str(e)}")
+
+            # 4. Resumen rápido en el chat
             summary = report_data['summary']
             response = [
-                "✅ **REPORTE GENERADO**",
-                f"👥 Usuarios: {summary['total_users']}",
-                f"📈 Actividades: {summary['total_activities']}",
-                f"📊 Promedio: {summary['avg_activities_per_user']:.1f}",
+                "✅ **REPORTE COMPLETO GENERADO**",
+                "",
+                f"📅 **Período analizado:** {summary.get('analysis_period_days', 'N/A')} días",
+                f"👥 **Usuarios únicos:** {summary['total_users']}",
+                f"📈 **Total actividades:** {summary['total_activities']}",
+                f"📊 **Promedio por usuario:** {summary['avg_activities_per_user']:.1f}",
+                "",
+                "💾 **Todos los archivos se han guardado automáticamente en:**",
+                "`C:/ChatBot/Logs/reportes/año/mes/día/`",
+                "",
+                "🎯 **Usa /estadisticas_detalladas para ver más análisis**"
             ]
 
-            await update.message.reply_text("\n".join(response))
+            await processing_msg.edit_text("\n".join(response), parse_mode='Markdown')
 
         except Exception as e:
             logger.error(f"Error en reporte avanzado: {str(e)}")
-            await update.message.reply_text("❌ Error generando reporte")
-
+            await update.message.reply_text(
+                "❌ *Error generando reportes avanzados*\n\n"
+                f"📋 **Detalles:** `{str(e)}`",
+                parse_mode='Markdown'
+            )
     async def estadisticas_detalladas(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Estadísticas detalladas"""
         user_id = update.effective_user.id
