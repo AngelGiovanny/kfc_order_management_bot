@@ -12,6 +12,67 @@ from src.handlers.callbacks import CallbackHandlers
 from src.services.image_service import image_service
 from src.services.report_service import ReportService
 
+# AGREGAR ESTAS IMPORTACIONES NUEVAS
+import win32print
+import win32ui
+
+
+# AGREGAR ESTA CLASE NUEVA PARA MANEJAR IMPRESORAS
+class ImpresoraManager:
+    def imprimir_ticket(self, contenido, nombre_impresora=None):
+        """Envía contenido directamente a la impresora física"""
+        try:
+            # 1. Obtener nombre de impresora
+            if nombre_impresora:
+                printer_name = nombre_impresora
+            else:
+                printer_name = win32print.GetDefaultPrinter()
+
+            print(f"🖨️ Intentando imprimir en: {printer_name}")
+
+            # 2. Conectar a la impresora
+            hprinter = win32print.OpenPrinter(printer_name)
+
+            try:
+                # 3. Iniciar documento de impresión
+                win32print.StartDocPrinter(hprinter, 1, ("Ticket KFC", None, "RAW"))
+                win32print.StartPagePrinter(hprinter)
+
+                # 4. Enviar texto a la impresora
+                # Agregar saltos de línea para impresora térmica
+                contenido_impresora = contenido + "\n\n\n\n\n"  # Saltos para cortar ticket
+                win32print.WritePrinter(hprinter, contenido_impresora.encode('utf-8'))
+
+                # 5. Finalizar impresión
+                win32print.EndPagePrinter(hprinter)
+                win32print.EndDocPrinter(hprinter)
+
+                print(f"✅ Ticket enviado exitosamente a: {printer_name}")
+                return True
+
+            except Exception as e:
+                print(f"❌ Error durante la impresión: {e}")
+                return False
+            finally:
+                win32print.ClosePrinter(hprinter)
+
+        except Exception as e:
+            print(f"❌ Error conectando a la impresora: {e}")
+            return False
+
+    def listar_impresoras(self):
+        """Lista todas las impresoras disponibles"""
+        try:
+            impresoras = win32print.EnumPrinters(2)  # 2 = PRINTER_ENUM_LOCAL
+            print("\n🖨️ IMPRESORAS DISPONIBLES:")
+            for i, impresora in enumerate(impresoras):
+                print(f"  {i + 1}. {impresora[2]}")
+            return [imp[2] for imp in impresoras]
+        except Exception as e:
+            print(f"Error listando impresoras: {e}")
+            return []
+
+
 class KFCBot:
     def __init__(self):
         self.settings = settings
@@ -20,6 +81,9 @@ class KFCBot:
         self.command_handlers = CommandHandlers()
         self.message_handlers = MessageHandlers(self.callback_handlers)
         self._stop_event = asyncio.Event()
+
+        # AGREGAR ESTA LÍNEA: Inicializar el manager de impresión
+        self.impresora_manager = ImpresoraManager()
 
     def setup_handlers(self):
         """Setup all bot handlers"""
@@ -48,6 +112,13 @@ class KFCBot:
         try:
             logger.info("Starting KFC Order Management Bot...")
 
+            # AGREGAR ESTO: Mostrar impresoras disponibles al iniciar
+            print("\n" + "=" * 50)
+            print("INICIANDO SISTEMA DE IMPRESIÓN KFC")
+            print("=" * 50)
+            self.impresora_manager.listar_impresoras()
+            print("=" * 50)
+
             # Create application
             self.application = (
                 Application.builder()
@@ -73,6 +144,52 @@ class KFCBot:
         except Exception as e:
             logger.error(f"Failed to start bot: {str(e)}")
             raise
+
+    # AGREGAR ESTE MÉTODO NUEVO para imprimir órdenes
+    def imprimir_orden_kfc(self, order_data):
+        """Función para imprimir órdenes de KFC"""
+        try:
+            # Crear contenido del ticket
+            ticket_content = f"""
+{'=' * 40}
+            KFC - ORDEN LISTA
+{'=' * 40}
+Orden: {order_data.get('order_id', 'N/A')}
+Fecha: {order_data.get('fecha', 'N/A')}
+Cliente: {order_data.get('cliente', 'N/A')}
+Telefono: {order_data.get('telefono', 'N/A')}
+{'=' * 40}
+PRODUCTOS:
+"""
+
+            # Agregar productos
+            productos = order_data.get('productos', [])
+            for producto in productos:
+                ticket_content += f"• {producto.get('nombre', '')} x{producto.get('cantidad', 1)}\n"
+                if producto.get('observaciones'):
+                    ticket_content += f"  Obs: {producto.get('observaciones')}\n"
+
+            ticket_content += f"""
+{'=' * 40}
+Total: ${order_data.get('total', '0')}
+{'=' * 40}
+¡GRACIAS POR SU COMPRA!
+{'=' * 40}
+"""
+
+            # Imprimir en la impresora física
+            success = self.impresora_manager.imprimir_ticket(ticket_content)
+
+            if success:
+                logger.info(f"✅ Orden {order_data.get('order_id')} impresa exitosamente")
+            else:
+                logger.error(f"❌ Error imprimiendo orden {order_data.get('order_id')}")
+
+            return success
+
+        except Exception as e:
+            logger.error(f"Error en impresión: {str(e)}")
+            return False
 
     async def run_polling(self):
         """Run the bot with polling"""
@@ -161,98 +278,3 @@ if __name__ == '__main__':
     finally:
         if not loop.is_closed():
             loop.close()
-
-
-            async def reporte_avanzado(update: Update, context: CallbackContext) -> None:
-                """Nuevo comando para reportes avanzados"""
-                user_id = update.message.chat.id
-                if user_id in admins:
-                    try:
-                        await update.message.reply_text("📊 Generando reporte avanzado...")
-
-                        # Generar reporte completo
-                        report_data = ReportService.generate_usage_report(activity_records)
-
-                        if not report_data:
-                            await update.message.reply_text("❌ Error generando reporte")
-                            return
-
-                        # Enviar gráfica
-                        chart_buffer = ReportService.generate_usage_chart(report_data)
-                        if chart_buffer.getbuffer().nbytes > 0:
-                            await update.message.reply_photo(
-                                photo=chart_buffer,
-                                caption="📈 Gráficas de Uso del Bot"
-                            )
-
-                        # Enviar reporte Excel
-                        excel_buffer = ReportService.generate_excel_report(activity_records, report_data)
-                        await update.message.reply_document(
-                            document=InputFile(excel_buffer,
-                                               filename=f"reporte_avanzado_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"),
-                            caption="📄 Reporte Avanzado en Excel"
-                        )
-
-                        # Enviar reporte TXT detallado
-                        txt_report = ReportService.generate_detailed_txt_report(activity_records, report_data)
-                        txt_buffer = io.BytesIO(txt_report.encode('utf-8'))
-                        await update.message.reply_document(
-                            document=InputFile(txt_buffer,
-                                               filename=f"reporte_detallado_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"),
-                            caption="📋 Reporte Detallado en TXT"
-                        )
-
-                    except Exception as e:
-                        logger.error(f"Error en reporte avanzado: {str(e)}")
-                        await update.message.reply_text("❌ Error generando reportes avanzados")
-                else:
-                    await update.message.reply_text("⛔ No tiene permisos para este comando")
-
-
-            async def estadisticas_detalladas(update: Update, context: CallbackContext) -> None:
-                """Estadísticas detalladas en el chat"""
-                user_id = update.message.chat.id
-                if user_id in admins:
-                    try:
-                        report_data = ReportService.generate_usage_report(activity_records)
-
-                        if not report_data:
-                            await update.message.reply_text("❌ Error generando estadísticas")
-                            return
-
-                        response = [
-                            "📊 *ESTADÍSTICAS DETALLADAS*",
-                            "",
-                            f"👥 *Usuarios Únicos:* {report_data['summary']['total_users']}",
-                            f"📈 *Total Actividades:* {report_data['summary']['total_activities']}",
-                            f"📊 *Promedio por Usuario:* {report_data['summary']['avg_activities_per_user']:.1f}",
-                            "",
-                            "*📋 DISTRIBUCIÓN POR ACCIÓN:*"
-                        ]
-
-                        for action, count in report_data['action_breakdown'].items():
-                            percentage = (count / report_data['summary']['total_activities']) * 100
-                            response.append(f"• {action}: {count} ({percentage:.1f}%)")
-
-                        response.extend([
-                            "",
-                            "*🏪 TOP 5 TIENDAS:*"
-                        ])
-
-                        top_stores = list(report_data['top_stores'].items())[:5]
-                        for i, (store, count) in enumerate(top_stores, 1):
-                            response.append(f"{i}. {store}: {count} actividades")
-
-                        response.extend([
-                            "",
-                            f"🕐 *Hora Pico:* {max(report_data['hourly_usage'].items(), key=lambda x: x[1])[0]}:00",
-                            f"📅 *Reporte generado:* {report_data['summary']['report_generated_at']}"
-                        ])
-
-                        await update.message.reply_text("\n".join(response))
-
-                    except Exception as e:
-                        logger.error(f"Error en estadísticas detalladas: {str(e)}")
-                        await update.message.reply_text("❌ Error generando estadísticas")
-                else:
-                    await update.message.reply_text("⛔ No tiene permisos para este comando")

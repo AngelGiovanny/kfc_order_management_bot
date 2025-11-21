@@ -10,6 +10,7 @@ from src.config.settings import settings
 from src.utils.logger import logger
 from src.services.order_service import OrderService
 from src.services.report_service import ReportService
+from src.services.reimpresion_service import ReimpresionService
 
 
 class CommandHandlers:
@@ -20,62 +21,138 @@ class CommandHandlers:
         self.activity_records = {}
         self.callback_handlers = callback_handlers
         self.report_service = ReportService()
+        self.reimpresion_service = ReimpresionService()
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /start command - MEJORADO CON REINICIO COMPLETO"""
-        user_id = update.effective_user.id
-        username = update.effective_user.username or update.effective_user.full_name
+        """Handle /start command"""
+        try:
+            user_id = update.effective_user.id
+            username = update.effective_user.username or update.effective_user.full_name
 
-        # REINICIAR COMPLETAMENTE el estado del usuario
-        self.user_states[user_id] = {'step': 'get_store_code'}
-        self.user_last_activity[user_id] = datetime.datetime.now().timestamp()
+            # Reiniciar estado del usuario
+            self.user_states[user_id] = {'step': 'get_store_code'}
+            self.user_last_activity[user_id] = datetime.datetime.now().timestamp()
 
-        # Registrar actividad
-        self._registrar_actividad(user_id, username, None, "start")
+            # Registrar actividad
+            self._registrar_actividad(user_id, username, None, "start")
 
-        welcome_message = (
-            "🔄 *¡Reiniciando Sistema!* 🔄\n\n"
-            "🎉 *¡Bienvenido al Sistema KFC!* 🍗\n\n"
-            "🌟 *Gestión Inteligente de Órdenes*\n"
-            "----------------------------------------\n\n"
-            "📋 **¿Qué puedes hacer?**\n"
-            "• ✅ Verificar estado de órdenes\n"
-            "• 📊 Auditoría completa\n"
-            "• 🧾 Generar imágenes de facturas\n"
-            "• 🖨️ Re-impresiones inteligentes\n"
-            "• 📦 Seguimiento de comandas\n\n"
-            "🔢 **Por favor, ingresa el código de tu tienda:**\n"
-            "*(Ejemplo: K002, K080, K100, K101)*"
-        )
+            welcome_message = (
+                "🎉 *¡Bienvenido al Sistema KFC!* 🍗\n\n"
+                "🌟 *Gestión Inteligente de Órdenes*\n"
+                "----------------------------------------\n\n"
+                "📋 **¿Qué puedes hacer?**\n"
+                "• ✅ Verificar estado de órdenes\n"
+                "• 📊 Auditoría completa\n"
+                "• 🧾 Generar imágenes de facturas\n"
+                "• 🖨️ Re-impresiones inteligentes\n"
+                "• 📦 Seguimiento de comandas\n\n"
+                "🔢 **Por favor, ingresa el código de tu tienda:**\n"
+                "*(Ejemplo: K002, K080, K100, K101)*"
+            )
 
-        await update.message.reply_text(
-            welcome_message,
-            parse_mode='Markdown',
-            reply_markup=None
-        )
+            await update.message.reply_text(
+                welcome_message,
+                parse_mode='Markdown'
+            )
+
+        except Exception as e:
+            logger.error(f"Error en comando start: {str(e)}")
+            await update.message.reply_text(
+                "❌ Error al iniciar el sistema. Por favor, intenta nuevamente."
+            )
 
     async def reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Nuevo comando /reset para reiniciar completamente"""
-        user_id = update.effective_user.id
-        username = update.effective_user.username or update.effective_user.full_name
+        """Comando /reset para reiniciar completamente"""
+        try:
+            user_id = update.effective_user.id
+            username = update.effective_user.username or update.effective_user.full_name
 
-        # LIMPIAR COMPLETAMENTE el estado
-        self.user_states[user_id] = {'step': 'get_store_code'}
-        self.user_last_activity[user_id] = datetime.datetime.now().timestamp()
+            # Limpiar estado
+            self.user_states[user_id] = {'step': 'get_store_code'}
+            self.user_last_activity[user_id] = datetime.datetime.now().timestamp()
 
-        self._registrar_actividad(user_id, username, None, "reset")
+            self._registrar_actividad(user_id, username, None, "reset")
 
-        reset_message = (
-            "🔄 *¡Sistema Reiniciado!* 🔄\n\n"
-            "✨ Todos los datos anteriores han sido limpiados.\n\n"
-            "🔢 **Por favor, ingresa el código de tu tienda:**\n"
-            "*(Ejemplo: K002, K080, K100, K101)*"
-        )
+            await update.message.reply_text(
+                "🔄 *¡Sistema Reiniciado!*\n\n"
+                "🔢 **Ingresa el código de tienda:**\n"
+                "(Ejemplo: K002, K080, K100)",
+                parse_mode='Markdown'
+            )
 
-        await update.message.reply_text(
-            reset_message,
-            parse_mode='Markdown'
-        )
+        except Exception as e:
+            logger.error(f"Error en comando reset: {str(e)}")
+            await update.message.reply_text("❌ Error al reiniciar el sistema.")
+
+    async def handle_reimprimir(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Manejar comando de reimpresión /reimprimir"""
+        try:
+            # Verificar parámetros
+            if not context.args or len(context.args) < 2:
+                await update.message.reply_text(
+                    "❌ *Formato incorrecto*\n\n"
+                    "📋 **Uso:** `/reimprimir <cfac_id> <tipo_documento>`\n\n"
+                    "🎯 **Ejemplos:**\n"
+                    "• `/reimprimir F001-123456 factura`\n"
+                    "• `/reimprimir NC001-789012 nota_credito`\n"
+                    "• `/reimprimir C001-345678 comanda`\n\n"
+                    "📄 **Tipos:** `factura`, `nota_credito`, `comanda`",
+                    parse_mode='Markdown'
+                )
+                return
+
+            cfac_id = context.args[0]
+            tipo_documento = context.args[1].lower()
+
+            # Validar tipo de documento
+            if tipo_documento not in ['factura', 'nota_credito', 'comanda']:
+                await update.message.reply_text(
+                    "❌ *Tipo de documento no válido*\n\n"
+                    "📋 **Tipos permitidos:**\n"
+                    "• `factura`\n• `nota_credito`\n• `comanda`",
+                    parse_mode='Markdown'
+                )
+                return
+
+            # Mensaje de procesamiento
+            processing_msg = await update.message.reply_text(
+                f"🔄 *Procesando reimpresión...*\n\n"
+                f"📄 **Documento:** {cfac_id}\n"
+                f"📋 **Tipo:** {tipo_documento}\n"
+                f"⏳ *Por favor espere...*",
+                parse_mode='Markdown'
+            )
+
+            # Ejecutar reimpresión
+            resultado = self.reimpresion_service.reimprimir_documento(cfac_id, tipo_documento)
+
+            # Enviar resultado
+            if resultado.get('success'):
+                await processing_msg.edit_text(
+                    f"✅ *Impresión exitosa*\n\n"
+                    f"📄 **Documento:** `{cfac_id}`\n"
+                    f"📋 **Tipo:** {tipo_documento}\n"
+                    f"📝 **Constancia:** RE IMPRESIÓN DE DOCUMENTO\n\n"
+                    f"🖨️ *Documento enviado a impresora*",
+                    parse_mode='Markdown'
+                )
+            else:
+                error_msg = (
+                    f"❌ *Error en impresión*\n\n"
+                    f"📄 **Documento:** `{cfac_id}`\n"
+                    f"⚠️ **Error:** {resultado.get('error', 'Desconocido')}"
+                )
+
+                if resultado.get('requires_support'):
+                    error_msg += "\n\n🚨 **CONTACTE CON SOPORTE TÉCNICO**"
+
+                await processing_msg.edit_text(error_msg, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error en comando reimprimir: {str(e)}")
+            await update.message.reply_text(
+                f"❌ Error procesando comando: {str(e)}"
+            )
 
     async def reporte_conexiones(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Reporte de conexiones activas"""
@@ -92,16 +169,8 @@ class CommandHandlers:
             f"📊 *Reporte de Conexiones*\n\n"
             f"• 👥 Usuarios activos: {len(self.user_states)}\n"
             f"• 🔗 Conexiones a tiendas: {active_connections}\n"
-            f"• ⏰ Última actividad: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            f"📋 *Usuarios conectados:*\n"
+            f"• ⏰ Última actividad: {datetime.datetime.now().strftime('%H:%M:%S')}"
         )
-
-        for uid, state in self.user_states.items():
-            if state.get('store_code'):
-                last_activity = datetime.datetime.fromtimestamp(
-                    self.user_last_activity.get(uid, 0)
-                ).strftime('%H:%M:%S')
-                reporte += f"• 🏪 {state.get('store_code')} - ⏰ {last_activity}\n"
 
         await update.message.reply_text(reporte, parse_mode='Markdown')
 
@@ -118,182 +187,87 @@ class CommandHandlers:
             f"• 🤖 Bot iniciado: Sí\n"
             f"• 👥 Usuarios registrados: {len(self.user_states)}\n"
             f"• 🏪 Tiendas activas: {len(set(state.get('store_code') for state in self.user_states.values() if state.get('store_code')))}\n"
-            f"• 📊 Consultas hoy: {len(self.activity_records)}\n"
-            f"• 🕐 Tiempo activo: Desde {datetime.datetime.now().strftime('%H:%M')}\n\n"
-            f"🔧 *Sistema operativo correctamente*"
+            f"• 📊 Consultas hoy: {len(self.activity_records)}"
         )
 
         await update.message.reply_text(stats, parse_mode='Markdown')
 
-    # =============================================================================
-    # NUEVOS COMANDOS DE REPORTES MEJORADOS CON GUARDADO AUTOMÁTICO
-    # =============================================================================
-
     async def reporte_avanzado(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Nuevo comando para reportes avanzados con gráficas y análisis completo"""
+        """Reporte avanzado con gráficas"""
         user_id = update.effective_user.id
 
         if user_id not in settings.bot.admins:
-            await update.message.reply_text("⛔ No tiene permisos de administrador para este comando")
+            await update.message.reply_text("⛔ No tiene permisos para este comando")
             return
 
         try:
-            await update.message.reply_text("📊 Generando reporte avanzado... Esto puede tomar unos segundos.")
+            await update.message.reply_text("📊 Generando reporte avanzado...")
 
-            # Generar reporte completo
+            # Generar reporte
             report_data = self.report_service.generate_usage_report(self.activity_records)
 
             if not report_data or not report_data.get('summary'):
-                await update.message.reply_text("❌ No hay datos suficientes para generar el reporte")
+                await update.message.reply_text("❌ No hay datos para generar el reporte")
                 return
 
-            # 1. Enviar gráfica de uso (con guardado automático)
+            # Enviar gráfica
             chart_buffer = self.report_service.generate_usage_chart(report_data, save_file=True)
             if chart_buffer.getbuffer().nbytes > 100:
                 await update.message.reply_photo(
                     photo=InputFile(chart_buffer, filename="grafica_uso.png"),
-                    caption="📈 **Gráficas de Uso del Bot**\n\nAnálisis visual del uso y distribución de actividades"
+                    caption="📈 Gráficas de Uso del Bot"
                 )
 
-            # 2. Enviar reporte Excel mejorado (con guardado automático)
-            excel_buffer = self.report_service.generate_excel_report(self.activity_records, report_data, save_file=True)
-            if excel_buffer.getbuffer().nbytes > 100:
-                filename = f"reporte_avanzado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-                await update.message.reply_document(
-                    document=InputFile(excel_buffer, filename=filename),
-                    caption="📊 **Reporte Avanzado en Excel**\n\nIncluye múltiples hojas con análisis detallado"
-                )
-
-            # 3. Enviar reporte TXT detallado (con guardado automático)
-            txt_report = self.report_service.generate_detailed_txt_report(self.activity_records, report_data, save_file=True)
-            if txt_report and "Error generando reporte" not in txt_report:
-                txt_buffer = io.BytesIO(txt_report.encode('utf-8'))
-                filename = f"reporte_detallado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.txt"
-                await update.message.reply_document(
-                    document=InputFile(txt_buffer, filename=filename),
-                    caption="📋 **Reporte Detallado en TXT**\n\nResumen ejecutivo y análisis textual"
-                )
-
-            # 4. Resumen rápido en el chat
+            # Resumen
             summary = report_data['summary']
             response = [
-                "✅ **REPORTE COMPLETO GENERADO**",
-                "",
-                f"📅 **Período analizado:** {summary.get('analysis_period_days', 'N/A')} días",
-                f"👥 **Usuarios únicos:** {summary['total_users']}",
-                f"📈 **Total actividades:** {summary['total_activities']}",
-                f"📊 **Promedio por usuario:** {summary['avg_activities_per_user']:.1f}",
-                "",
-                "💾 **Todos los archivos se han guardado automáticamente en:**",
-                "`reportes/año/mes/día/`",
-                "",
-                "🎯 **Usa /estadisticas_detalladas para ver más análisis**"
+                "✅ **REPORTE GENERADO**",
+                f"👥 Usuarios: {summary['total_users']}",
+                f"📈 Actividades: {summary['total_activities']}",
+                f"📊 Promedio: {summary['avg_activities_per_user']:.1f}",
             ]
 
             await update.message.reply_text("\n".join(response))
 
         except Exception as e:
             logger.error(f"Error en reporte avanzado: {str(e)}")
-            await update.message.reply_text("❌ Error generando reportes avanzados. Revisa los logs.")
+            await update.message.reply_text("❌ Error generando reporte")
 
     async def estadisticas_detalladas(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Estadísticas detalladas en el chat con análisis avanzado"""
+        """Estadísticas detalladas"""
         user_id = update.effective_user.id
 
         if user_id not in settings.bot.admins:
-            await update.message.reply_text("⛔ No tiene permisos de administrador para este comando")
+            await update.message.reply_text("⛔ No tiene permisos para este comando")
             return
 
         try:
             report_data = self.report_service.generate_usage_report(self.activity_records)
 
             if not report_data or not report_data.get('summary'):
-                await update.message.reply_text("📊 No hay datos suficientes para el análisis")
+                await update.message.reply_text("📊 No hay datos para el análisis")
                 return
 
             summary = report_data['summary']
-            action_breakdown = report_data.get('action_breakdown', {})
-            top_stores = report_data.get('top_stores', {})
-            hourly_usage = report_data.get('hourly_usage', {})
-
-            # Calcular métricas adicionales
-            total_actions = sum(action_breakdown.values())
-            peak_hour = max(hourly_usage.items(), key=lambda x: x[1])[0] if hourly_usage else "N/A"
-
             response = [
-                "📊 **ESTADÍSTICAS DETALLADAS - KFC BOT**",
-                "",
-                "📈 **RESUMEN EJECUTIVO**",
-                f"• Usuarios únicos: {summary['total_users']}",
-                f"• Total actividades: {summary['total_activities']}",
-                f"• Promedio por usuario: {summary['avg_activities_per_user']:.1f}",
-                f"• Hora pico: {peak_hour}:00",
-                "",
-                "🎯 **DISTRIBUCIÓN POR ACCIÓN**"
+                "📊 **ESTADÍSTICAS DETALLADAS**",
+                f"👥 Usuarios únicos: {summary['total_users']}",
+                f"📈 Total actividades: {summary['total_activities']}",
+                f"📊 Promedio por usuario: {summary['avg_activities_per_user']:.1f}",
             ]
-
-            # Agregar tipos de acción con porcentajes
-            for action, count in sorted(action_breakdown.items(), key=lambda x: x[1], reverse=True):
-                percentage = (count / total_actions) * 100 if total_actions > 0 else 0
-                emoji = {
-                    'store_access': '🏪',
-                    'check_status': '📦',
-                    'audit': '📋',
-                    'reprint': '🖨️',
-                    'generate_image': '🖼️',
-                    'comanda': '🍔',
-                    'associated_code': '🔗',
-                    'start': '🚀'
-                }.get(action, '📊')
-
-                action_name = {
-                    'store_access': 'Acceso a tienda',
-                    'check_status': 'Consulta estado',
-                    'audit': 'Auditoría',
-                    'reprint': 'Re-impresión',
-                    'generate_image': 'Imagen factura',
-                    'comanda': 'Comanda',
-                    'associated_code': 'Código asociado',
-                    'start': 'Inicio sesión'
-                }.get(action, action)
-
-                response.append(f"{emoji} {action_name}: {count} ({percentage:.1f}%)")
-
-            # Top tiendas si hay datos
-            if top_stores:
-                response.extend(["", "🏪 **TOP 5 TIENDAS MÁS ACTIVAS**"])
-                for i, (store, count) in enumerate(list(top_stores.items())[:5], 1):
-                    response.append(f"{i}. {store}: {count} actividades")
-
-            # Uso por hora si hay datos
-            if len(hourly_usage) > 5:
-                response.extend(["", "🕐 **HORARIOS MÁS ACTIVOS**"])
-                top_hours = sorted(hourly_usage.items(), key=lambda x: x[1], reverse=True)[:3]
-                for hour, count in top_hours:
-                    response.append(f"• {hour:02d}:00 - {count} actividades")
-
-            response.extend([
-                "",
-                f"📅 **Reporte generado:** {summary['report_generated_at']}",
-                "",
-                "💾 **Los reportes completos se guardan automáticamente en:**",
-                "`reportes/año/mes/día/`",
-                "",
-                "💡 **Usa /reporte_avanzado para reportes completos en Excel**"
-            ])
 
             await update.message.reply_text("\n".join(response))
 
         except Exception as e:
-            logger.error(f"Error en estadísticas detalladas: {str(e)}")
-            await update.message.reply_text("❌ Error generando estadísticas detalladas")
+            logger.error(f"Error en estadísticas: {str(e)}")
+            await update.message.reply_text("❌ Error generando estadísticas")
 
     async def reporte_diario(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Reporte rápido del día actual con guardado automático"""
+        """Reporte del día actual"""
         user_id = update.effective_user.id
 
         if user_id not in settings.bot.admins:
-            await update.message.reply_text("⛔ No tiene permisos de administrador para este comando")
+            await update.message.reply_text("⛔ No tiene permisos para este comando")
             return
 
         try:
@@ -306,102 +280,37 @@ class CommandHandlers:
                         today_activities.append(record)
 
             if not today_activities:
-                await update.message.reply_text(f"📊 No hay actividades registradas para hoy ({today})")
+                await update.message.reply_text(f"📊 No hay actividades para hoy ({today})")
                 return
-
-            # Análisis simple del día
-            users_today = set()
-            stores_today = set()
-            action_counts = defaultdict(int)
-
-            for activity in today_activities:
-                parts = activity.split(' - ')
-                if len(parts) >= 2:
-                    user_part = parts[1]
-                    # Extraer user ID
-                    if 'Usuario:' in user_part and '(ID:' in user_part:
-                        user_id = user_part.split('(ID: ')[1].split(')')[0]
-                        users_today.add(user_id)
-
-                    # Contar acciones
-                    if 'Tienda:' in activity:
-                        action_counts['Acceso Tienda'] += 1
-                        store_part = activity.split('Tienda: ')[1]
-                        store_code = store_part.split()[0] if ' ' in store_part else store_part
-                        stores_today.add(store_code)
-                    elif 'estado' in activity.lower():
-                        action_counts['Consulta Estado'] += 1
-                    elif 'auditoria' in activity.lower():
-                        action_counts['Auditoría'] += 1
-                    elif 'reimpresion' in activity.lower():
-                        action_counts['Re-impresión'] += 1
 
             response = [
                 f"📊 **REPORTE DIARIO - {today}**",
-                "",
-                f"👥 **Usuarios activos hoy:** {len(users_today)}",
-                f"🏪 **Tiendas activas hoy:** {len(stores_today)}",
-                f"📈 **Total actividades hoy:** {len(today_activities)}",
-                "",
-                "🎯 **DISTRIBUCIÓN DE ACTIVIDADES:**"
+                f"📈 Total actividades hoy: {len(today_activities)}",
+                f"⏰ Generado: {datetime.datetime.now().strftime('%H:%M:%S')}",
             ]
 
-            for action, count in sorted(action_counts.items(), key=lambda x: x[1], reverse=True):
-                percentage = (count / len(today_activities)) * 100
-                response.append(f"• {action}: {count} ({percentage:.1f}%)")
-
-            if stores_today:
-                response.extend(["", "🏪 **TIENDAS ACTIVAS HOY:**"])
-                for store in sorted(list(stores_today)[:10]):
-                    response.append(f"• {store}")
-
-            response.extend([
-                "",
-                f"⏰ **Generado:** {datetime.datetime.now().strftime('%H:%M:%S')}",
-                "",
-                "💾 **Los reportes completos se guardan automáticamente en:**",
-                "`reportes/año/mes/día/`",
-                "",
-                "💡 **Usa /reporte_avanzado para análisis completo con gráficas**"
-            ])
-
             await update.message.reply_text("\n".join(response))
-
-            # Generar y guardar automáticamente el reporte completo del día
-            report_data = self.report_service.generate_usage_report(self.activity_records)
-            if report_data:
-                self.report_service.generate_daily_auto_report(self.activity_records)
-                logger.info(f"✅ Reporte diario automático guardado para {today}")
 
         except Exception as e:
             logger.error(f"Error en reporte diario: {str(e)}")
             await update.message.reply_text("❌ Error generando reporte diario")
 
     async def reporte_automatico(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Genera y guarda automáticamente reporte sin enviar por Telegram"""
+        """Reporte automático"""
         user_id = update.effective_user.id
 
         if user_id not in settings.bot.admins:
-            await update.message.reply_text("⛔ No tiene permisos de administrador para este comando")
+            await update.message.reply_text("⛔ No tiene permisos para este comando")
             return
 
         try:
             await update.message.reply_text("🤖 Generando reporte automático...")
-
-            # Generar y guardar automáticamente sin enviar archivos
             report_data = self.report_service.generate_daily_auto_report(self.activity_records)
 
             if report_data:
-                await update.message.reply_text(
-                    "✅ **Reporte automático guardado correctamente**\n\n"
-                    f"📊 **Resumen:**\n"
-                    f"• 👥 Usuarios: {report_data['summary']['total_users']}\n"
-                    f"• 📈 Actividades: {report_data['summary']['total_activities']}\n"
-                    f"• 💾 Guardado en: `reportes/{datetime.datetime.now().year}/"
-                    f"{datetime.datetime.now().month:02d}/{datetime.datetime.now().day:02d}/`"
-                )
+                await update.message.reply_text("✅ Reporte automático guardado")
             else:
-                await update.message.reply_text("❌ No se pudo generar el reporte automático")
+                await update.message.reply_text("❌ No se pudo generar el reporte")
 
         except Exception as e:
             logger.error(f"Error en reporte automático: {str(e)}")
@@ -409,30 +318,33 @@ class CommandHandlers:
 
     def _registrar_actividad(self, user_id: int, username: str, store_code: str = None, action_type: str = None):
         """Registrar actividad del usuario"""
-        fecha_hora = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        registro = f"{fecha_hora} - Usuario: {username} (ID: {user_id})"
+        try:
+            fecha_hora = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            registro = f"{fecha_hora} - Usuario: {username} (ID: {user_id})"
 
-        if store_code:
-            registro += f" - Tienda: {store_code}"
+            if store_code:
+                registro += f" - Tienda: {store_code}"
 
-        if action_type:
-            registro += f" - Acción: {action_type}"
+            if action_type:
+                registro += f" - Acción: {action_type}"
 
-        if user_id not in self.activity_records:
-            self.activity_records[user_id] = []
+            if user_id not in self.activity_records:
+                self.activity_records[user_id] = []
 
-        self.activity_records[user_id].append(registro)
+            self.activity_records[user_id].append(registro)
+        except Exception as e:
+            logger.error(f"Error registrando actividad: {str(e)}")
 
     def get_handlers(self):
         """Get all command handlers"""
         return [
             CommandHandler("start", self.start),
             CommandHandler("reset", self.reset),
+            CommandHandler("reimprimir", self.handle_reimprimir),
             CommandHandler("reporte_conexiones", self.reporte_conexiones),
             CommandHandler("estadisticas", self.estadisticas),
-            # NUEVOS COMANDOS DE REPORTES
             CommandHandler("reporte_avanzado", self.reporte_avanzado),
             CommandHandler("estadisticas_detalladas", self.estadisticas_detalladas),
             CommandHandler("reporte_diario", self.reporte_diario),
-            CommandHandler("reporte_automatico", self.reporte_automatico),  # Nuevo comando
+            CommandHandler("reporte_automatico", self.reporte_automatico),
         ]

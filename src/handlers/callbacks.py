@@ -4,12 +4,65 @@ from telegram.ext import ContextTypes, CallbackQueryHandler
 from src.config.constants import USER_STATES
 from src.utils.logger import logger
 
+# AGREGAR ESTAS IMPORTACIONES
+import datetime
+from src.services.order_service import OrderService
+
+
+# AGREGAR ESTA CLASE PARA IMPRESIÓN (EVITA IMPORTACIÓN CIRCULAR)
+class ImpresoraManager:
+    def imprimir_ticket(self, contenido, nombre_impresora=None):
+        """Envía contenido directamente a la impresora física"""
+        try:
+            import win32print
+            import win32ui
+
+            # 1. Obtener nombre de impresora
+            if nombre_impresora:
+                printer_name = nombre_impresora
+            else:
+                printer_name = win32print.GetDefaultPrinter()
+
+            print(f"🖨️ Intentando imprimir en: {printer_name}")
+
+            # 2. Conectar a la impresora
+            hprinter = win32print.OpenPrinter(printer_name)
+
+            try:
+                # 3. Iniciar documento de impresión
+                win32print.StartDocPrinter(hprinter, 1, ("Ticket KFC", None, "RAW"))
+                win32print.StartPagePrinter(hprinter)
+
+                # 4. Enviar texto a la impresora
+                contenido_impresora = contenido + "\n\n\n\n\n"  # Saltos para cortar ticket
+                win32print.WritePrinter(hprinter, contenido_impresora.encode('utf-8'))
+
+                # 5. Finalizar impresión
+                win32print.EndPagePrinter(hprinter)
+                win32print.EndDocPrinter(hprinter)
+
+                print(f"✅ Ticket enviado exitosamente a: {printer_name}")
+                return True
+
+            except Exception as e:
+                print(f"❌ Error durante la impresión: {e}")
+                return False
+            finally:
+                win32print.ClosePrinter(hprinter)
+
+        except Exception as e:
+            print(f"❌ Error conectando a la impresora: {e}")
+            return False
+
 
 class CallbackHandlers:
     def __init__(self):
         self.user_states = {}
         self.user_last_activity = {}
         self.conteo_impresiones = {}
+        # AGREGAR ESTAS LÍNEAS
+        self.order_service = OrderService()
+        self.impresora_manager = ImpresoraManager()
 
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle callback queries from inline keyboards - COMPLETO Y CORREGIDO"""
@@ -55,7 +108,7 @@ class CallbackHandlers:
             elif query.data == '4':  # Ver Comanda
                 await self._handle_opcion_4(query, state)
 
-            elif query.data == '5':  # Código Asociado - ¡CORREGIDO!
+            elif query.data == '5':  # Código Asociado
                 await self._handle_opcion_5(query, state)
 
             elif query.data == '7':  # Re-Impresion
@@ -67,6 +120,13 @@ class CallbackHandlers:
             # SUBMENÚ DE RE-IMPRESIONES
             elif query.data in ['factura', 'nota_credito', 'comanda']:
                 await self._handle_reprint_submenu(query, state)
+
+            # AGREGAR ESTOS NUEVOS CALLBACKS PARA IMPRESIÓN
+            elif query.data.startswith('imprimir_factura:'):
+                await self._handle_imprimir_factura(query, state)
+
+            elif query.data.startswith('imprimir_comanda:'):
+                await self._handle_imprimir_comanda(query, state)
 
             else:
                 logger.warning(f"❌ Callback no reconocido: {query.data}")
@@ -87,6 +147,217 @@ class CallbackHandlers:
                 parse_mode='Markdown'
             )
 
+    # AGREGAR ESTOS NUEVOS MÉTODOS PARA MANEJAR IMPRESIÓN
+    async def _handle_imprimir_factura(self, query, state):
+        """Manejar impresión de factura"""
+        cfac_id = query.data.split(':')[1]
+        store_code = state.get('store_code')
+
+        await query.edit_message_text(
+            f"🖨️ *Preparando impresión de factura...*\n\n"
+            f"🧾 **Factura:** `{cfac_id}`\n"
+            f"🏪 **Tienda:** `{store_code}`\n\n"
+            f"⏳ *Procesando...*",
+            parse_mode='Markdown'
+        )
+
+        try:
+            # Obtener datos de la factura para imprimir
+            factura_data = self._obtener_datos_factura(store_code, cfac_id)
+
+            if factura_data:
+                # Usar el manager de impresión local (sin importación circular)
+                success = self._imprimir_orden_kfc(factura_data)
+
+                if success:
+                    await query.edit_message_text(
+                        f"✅ *Factura impresa exitosamente* 🖨️\n\n"
+                        f"🧾 **Factura:** `{cfac_id}`\n"
+                        f"🏪 **Tienda:** `{store_code}`\n\n"
+                        f"📄 El ticket ha sido enviado a la impresora física.",
+                        parse_mode='Markdown'
+                    )
+                else:
+                    await query.edit_message_text(
+                        f"❌ *Error en la impresión* ⚠️\n\n"
+                        f"🧾 **Factura:** `{cfac_id}`\n"
+                        f"🏪 **Tienda:** `{store_code}`\n\n"
+                        f"🔧 **Posibles causas:**\n"
+                        f"• Impresora desconectada\n"
+                        f"• Sin papel\n"
+                        f"• Error de conexión\n\n"
+                        f"🔄 Verifique la impresora e intente nuevamente.",
+                        parse_mode='Markdown'
+                    )
+            else:
+                await query.edit_message_text(
+                    f"❌ *No se pudieron obtener datos de la factura*\n\n"
+                    f"🧾 **Factura:** `{cfac_id}`\n"
+                    f"🏪 **Tienda:** `{store_code}`\n\n"
+                    f"📞 Contacte a soporte técnico.",
+                    parse_mode='Markdown'
+                )
+
+        except Exception as e:
+            logger.error(f"Error imprimiendo factura: {str(e)}")
+            await query.edit_message_text(
+                f"❌ *Error al imprimir factura*\n\n"
+                f"📋 **Detalles:** `{str(e)}`\n\n"
+                f"🔧 Verifique la configuración de impresión.",
+                parse_mode='Markdown'
+            )
+
+        # Volver al menú principal
+        state['step'] = USER_STATES['MAIN_MENU']
+        await self.mostrar_menu_principal(query.message)
+
+    async def _handle_imprimir_comanda(self, query, state):
+        """Manejar impresión de comanda"""
+        cfac_id = query.data.split(':')[1]
+        store_code = state.get('store_code')
+
+        await query.edit_message_text(
+            f"🖨️ *Preparando impresión de comanda...*\n\n"
+            f"📦 **Comanda:** `{cfac_id}`\n"
+            f"🏪 **Tienda:** `{store_code}`\n\n"
+            f"⏳ *Procesando...*",
+            parse_mode='Markdown'
+        )
+
+        try:
+            # Obtener datos de la comanda para imprimir
+            comanda_data = self._obtener_datos_comanda(store_code, cfac_id)
+
+            if comanda_data:
+                # Usar el manager de impresión local (sin importación circular)
+                success = self._imprimir_orden_kfc(comanda_data)
+
+                if success:
+                    await query.edit_message_text(
+                        f"✅ *Comanda impresa exitosamente* 🖨️\n\n"
+                        f"📦 **Comanda:** `{cfac_id}`\n"
+                        f"🏪 **Tienda:** `{store_code}`\n\n"
+                        f"📄 El ticket ha sido enviado a la impresora física.",
+                        parse_mode='Markdown'
+                    )
+                else:
+                    await query.edit_message_text(
+                        f"❌ *Error en la impresión* ⚠️\n\n"
+                        f"📦 **Comanda:** `{cfac_id}`\n"
+                        f"🏪 **Tienda:** `{store_code}`\n\n"
+                        f"🔧 **Posibles causas:**\n"
+                        f"• Impresora desconectada\n"
+                        f"• Sin papel\n"
+                        f"• Error de conexión\n\n"
+                        f"🔄 Verifique la impresora e intente nuevamente.",
+                        parse_mode='Markdown'
+                    )
+            else:
+                await query.edit_message_text(
+                    f"❌ *No se pudieron obtener datos de la comanda*\n\n"
+                    f"📦 **Comanda:** `{cfac_id}`\n"
+                    f"🏪 **Tienda:** `{store_code}`\n\n"
+                    f"📞 Contacte a soporte técnico.",
+                    parse_mode='Markdown'
+                )
+
+        except Exception as e:
+            logger.error(f"Error imprimiendo comanda: {str(e)}")
+            await query.edit_message_text(
+                f"❌ *Error al imprimir comanda*\n\n"
+                f"📋 **Detalles:** `{str(e)}`\n\n"
+                f"🔧 Verifique la configuración de impresión.",
+                parse_mode='Markdown'
+            )
+
+        # Volver al menú principal
+        state['step'] = USER_STATES['MAIN_MENU']
+        await self.mostrar_menu_principal(query.message)
+
+    def _imprimir_orden_kfc(self, order_data):
+        """Función para imprimir órdenes de KFC (versión local)"""
+        try:
+            # Crear contenido del ticket
+            ticket_content = f"""
+{'=' * 40}
+            KFC - ORDEN LISTA
+{'=' * 40}
+Orden: {order_data.get('order_id', 'N/A')}
+Fecha: {order_data.get('fecha', 'N/A')}
+Cliente: {order_data.get('cliente', 'N/A')}
+Telefono: {order_data.get('telefono', 'N/A')}
+{'=' * 40}
+PRODUCTOS:
+"""
+
+            # Agregar productos
+            productos = order_data.get('productos', [])
+            for producto in productos:
+                ticket_content += f"• {producto.get('nombre', '')} x{producto.get('cantidad', 1)}\n"
+                if producto.get('observaciones'):
+                    ticket_content += f"  Obs: {producto.get('observaciones')}\n"
+
+            ticket_content += f"""
+{'=' * 40}
+Total: ${order_data.get('total', '0')}
+{'=' * 40}
+¡GRACIAS POR SU COMPRA!
+{'=' * 40}
+"""
+
+            # Imprimir en la impresora física
+            success = self.impresora_manager.imprimir_ticket(ticket_content)
+
+            if success:
+                logger.info(f"✅ Orden {order_data.get('order_id')} impresa exitosamente")
+            else:
+                logger.error(f"❌ Error imprimiendo orden {order_data.get('order_id')}")
+
+            return success
+
+        except Exception as e:
+            logger.error(f"Error en impresión: {str(e)}")
+            return False
+
+    def _obtener_datos_factura(self, store_code, cfac_id):
+        """Obtener datos de factura para impresión"""
+        try:
+            # Por ahora retorno datos de ejemplo - puedes conectar con tu base de datos después
+            return {
+                'order_id': cfac_id,
+                'fecha': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                'cliente': 'Cliente Factura',
+                'telefono': 'N/A',
+                'productos': [
+                    {'nombre': 'Factura Impresa', 'cantidad': 1, 'observaciones': f'CFAC: {cfac_id}'}
+                ],
+                'total': '0.00',
+                'tipo': 'FACTURA'
+            }
+        except Exception as e:
+            logger.error(f"Error obteniendo datos factura: {str(e)}")
+            return None
+
+    def _obtener_datos_comanda(self, store_code, cfac_id):
+        """Obtener datos de comanda para impresión"""
+        try:
+            # Por ahora retorno datos de ejemplo - puedes conectar con tu base de datos después
+            return {
+                'order_id': cfac_id,
+                'fecha': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                'cliente': 'Cliente Comanda',
+                'telefono': 'N/A',
+                'productos': [
+                    {'nombre': 'Comanda Impresa', 'cantidad': 1, 'observaciones': f'Comanda: {cfac_id}'}
+                ],
+                'total': '0.00',
+                'tipo': 'COMANDA'
+            }
+        except Exception as e:
+            logger.error(f"Error obteniendo datos comanda: {str(e)}")
+            return None
+
+    # LOS MÉTODOS ORIGINALES SE MANTIENEN IGUAL...
     async def _handle_opcion_1(self, query, state):
         """Verificar Estado de Orden"""
         state['step'] = USER_STATES['GET_ORDER_STATUS']
@@ -160,7 +431,7 @@ class CallbackHandlers:
         )
 
     async def _handle_opcion_5(self, query, state):
-        """Código Asociado - ¡IMPLEMENTADO CORRECTAMENTE!"""
+        """Código Asociado"""
         state['step'] = USER_STATES['GET_CFAC_ID']
         keyboard = [
             [InlineKeyboardButton("↩️ Volver al Menú", callback_data='volver_menu')],
